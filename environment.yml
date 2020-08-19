@@ -1,0 +1,8 @@
+name: rpo_gene
+channels:
+  - defaults
+  - bioconda
+  - conda-forge
+dependencies:
+  - bioconda::blast=2.10.
+  - conda-forge::parallel=20200522
