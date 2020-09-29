@@ -24,86 +24,50 @@ cat uniprot-rpoc_taxonomy_Bacteria_AND_reviewed_yes.fasta | parallel --gnu --blo
 	-db /data2/refdb/ncbi/nt \
 	-query - > blast.out &
 
-# RPOA PROCESSING
-
-# RPOB PROCESSING
-
 # RPOC PROCESSING
-
-
-
-
-
-
-
-
-
-
-
-
-# now need to pull those entries that had 90% identity to the protein sequence, and an alignment of at least 1kb
-awk -F"\t" '$3>=90.0 && $12>=2000' homd_blast.out > homd_blast.90pid2k.out
-awk -F"\t" '$3>=90.0 && $12>=2000' n4k_blast.out > n4k_blast.90pid2k.out
-# get list of fasta that will need to be rev comp none in 4k
-awk '{if($9>$10){print($2)}}' homd_blast.90pid2k.out > homd_blast.revcomp.ids
-# list of ids that are in correct orientation
-awk '{if($10>$9){print($2)}}' homd_blast.90pid2k.out > homd_blast.normal.ids
-# format for bedtools
-awk '{if($10>$9){print($2"\t"$9-1"\t"$10)}else{print($2"\t"$10-1"\t"$9)}}' homd_blast.90pid2k.out > homd_blast.90pid2k.bed
-awk '{if($10>$9){print($2"\t"$9-1"\t"$10)}else{print($2"\t"$10-1"\t"$9)}}' n4k_blast.90pid2k.out > n4k_blast.90pid2k.bed
-# slice genomes
-bedtools getfasta -fi ~/refDB/homd_genomes/ALL_genomes.fna \
-	-bed homd_blast.90pid2k.bed > homd_blast.90pid2k.fa
-bedtools getfasta -fi ~/refDB/vince_oral_genomes/n4584.fnn \
-	-bed n4k_blast.90pid2k.bed > n4k_blast.90pid2k.fa
-# fix headers for seqtk
-sed -i 's/:/\t/' homd_blast.90pid2k.fa
-# reverse complement
-seqtk subseq homd_blast.90pid2k.fa homd_blast.revcomp.ids | seqtk seq -r > homd_blast.revcomp.fa
-# normal complement
-seqtk subseq homd_blast.90pid2k.fa homd_blast.normal.ids > homd_blast.normal.fa
-# clean up
-rm homd_blast.90pid2k.fa
-cat homd_blast.normal.fa homd_blast.revcomp.fa > homd_blast.90pid2k.fa
-rm homd_blast.normal.fa homd_blast.revcomp.fa
-rm *ids
-# cat together both datasets
-cat n4k_blast.90pid2k.fa homd_blast.90pid2k.fa > all.fa
-# remove sequence duplicates
-vsearch --derep_fulllength all.fa --output all.derep.fa --sizeout
+cd rpoC/
+# pull entries that had 80% identity to protein sequence, alignment of at least 1kb
+awk -F"\t" '$3>=80.0 && $4>=1000' blast.out > good.hits
+# get rid of rpoB sequences
+grep -v "RPOB" good.hits > temp
+mv temp good.hits
+# format for bedtools to pull rpoC regions
+awk '{if($10>$9){print($2"\t"$9-1"\t"$10)}else{print($2"\t"$10-1"\t"$9)}}' good.hits > good.hits.bed
+# slice database
+bedtools getfasta -fi /data2/refdb/ncbi/nt -bed good.hits.bed > good.hits.fa
 # sort by length
-vsearch --sortbylength all.derep.fa --output all.sort.fa
-# cluster at 99%
-vsearch --cluster_fast all.sort.fa --id 0.99 --centroids all.clust.fa --sizein --sizeout
-# add in chloroplast outgroup
-cat all.clust.fa arabidopsis_rpob.fa > temp
-mv temp all.clust.fa
+vsearch --sortbylength good.hits.fa --output good.hits.sort.fa
+# remove sequence duplicates
+vsearch --derep_fulllength good.hits.sort.fa \
+	--output good.hits.derep.fa \
+	--uc good.hits.derep.uc \
+	--sizeout
+# cluster at 99% identity
+vsearch --cluster_fast good.hits.derep.fa \
+	--id 0.99 \
+	--centroids good.hits.clust.fa \
+	--profile good.hits.clust.profile.fa \
+	--sizein \
+	--sizeout \
+	--threads 0
+# add in chloroplast outgroup (zea mays rpoc1)
+cat good.hits.clust.fa zea_mays.rpoc1.fa > temp
+mv temp good.hits.clust.fa
 # align sequences
-mafft --auto all.clust.fa > all.align.fa
-# trim 
-trimal -in all.align.fa \
-	-out all.trimal.fa \
-	-resoverlap 0.90 \
-	-seqoverlap 90 \
+mafft --auto good.hits.clust.fa > good.hits.align.fa
+# change sequence headers so trimal doesn't cut them out and raxml doesn't freak out
+sed -i 's/:/_/' good.hits.align.fa
+sed -i 's/;/_/g' good.hits.align.fa
+# trim
+trimal -in good.hits.align.fa \
+	-out good.hits.trimal.fa \
+	-resoverlap 0.80 \
+	-seqoverlap 80 \
 	-gt 0.5 \
-	-st 0.001 \
-	-scc \
-	-sident \
-	1> all.trimal.out
-# fix headers for raxml
-sed -i 's/;/ /' all.trimal.fa
-# manually removed poorly aligned duplicates in aliview, saved as clean copy
-# Sequence names of taxon 102 and 243 are identical, they are both called SEQF1300_CP000076.1
-# Sequence names of taxon 106 and 244 are identical, they are both called SEQF2332_CP003041.1
-# Sequence names of taxon 388 and 692 are identical, they are both called SEQF2672_CP006936.2
-# Sequence names of taxon 391 and 406 are identical, they are both called SEQF1130_CP001658.1
-# Sequence names of taxon 391 and 519 are identical, they are both called SEQF1130_CP001658.1
-# Sequence names of taxon 406 and 519 are identical, they are both called SEQF1130_CP001658.1
-# Sequence names of taxon 419 and 500 are identical, they are both called SEQF2206_AENR01000042.1
-# Sequence names of taxon 422 and 504 are identical, they are both called SEQF2204_GL545268.1
-# ERROR: Found 8 taxa that had equal names in the alignment, exiting...
-# build a reference tree
-~/raxmlHPC-AVX-v8/raxml -T 4 \
+	-st 0.001 
+# reference tree
+rm *tre
+raxmlHPC-PTHREADS -T 60 \
 	-m GTRCAT \
 	-c 25 \
 	-e 0.001 \
@@ -111,143 +75,295 @@ sed -i 's/;/ /' all.trimal.fa
 	-f a \
 	-N 100 \
 	-x 02938 \
-	-n all.tre \
-	-s all.clean.fa
-# get taxonomy info for tree annotations
-grep ">SEQ" all.clean.fa | sed 's/>//' | \
-	awk -F"_" '{print $1}' | \
-	while read line; do grep -w $line ~/refDB/homd_genomes/SEQID_info.txt ; \
-	done > temp
-grep ">" all.clean.fa | grep -v "SEQ" | \
-	sed 's/>//' | awk -F"|" '{print $1}' | \
-	sed 's/NC.*//' | while read line; do \
-	grep -w $line ~/refDB/vince_oral_genomes/ID-n4584-1.txt ; done > temp2
-# remove wonky sequences from alignment
-# SEQF1302_AM181176.4
-# SEQF1303_CP000304.1
-# SEQF1645_FM211192.1
-# SEQF1836_GG696773.1
-# SEQF2196_CM001025.1
-# SEQF2333_AGSL01000031.1
-# SEQF2352_AJMR01000041.1
-# SEQF2381_CM001513.1
-# SEQF2382_CP003677.1
-# SEQF2383_AFEH01000043.1
-# SEQF2423_HG916826.1
-# SEQF2513_AJXE01000041.1
-# SEQF2521_CP003725.1
-# esc_col_97|ECTT12B_5153
-# myc_tub_93|Z534_00164
-# myc_tub_99|X376_03205
-# pse_flu_11|pse_flu_11_04670
-# pse_flu_12|pse_flu_12_32765
-# pse_flu_14|pse_flu_14_05555
-# pse_flu_16|pse_flu_16_08460
-# pse_flu_1|SRM1_05185
-# pse_flu_22|pse_flu_22_28050
-# pse_flu_23|pse_flu_23_06855
-# pse_flu_27|pse_flu_27_02895
-# pse_flu_29|NL64_10740
-# pse_flu_34|PFLU4_43860
-# pse_flu_37|pse_flu_37_20515
-# pse_flu_38|A1D17_17590
-# pse_flu_39|AO356_14615
-# pse_flu_40|TK06_24250
-# pse_flu_41|AO353_07030
-# pse_flu_43|pse_flu_43_06290
-# pse_flu_45|RY26_30130
-# pse_flu_47|VD17_07105
-# pse_flu_49|AO066_26680
-# pse_flu_55|RU10_25275
-# pse_flu_57|UG46_24200
-# pse_flu_58|pse_flu_58_14350
-# pse_flu_59|PF1751_v1c49570
-# pse_flu_5|pse_flu_5_12300
-# pse_flu_64|AWV77_16650
-# pse_flu_66|AN403_604
-# pse_flu_67|NX10_25670
-# pse_flu_68|QS95_25800
-# pse_flu_70|RL74_14730
-# pse_flu_75|PSF113_5301
-# pse_flu_79|B723_01820
-# pse_flu_84|Pfl01_5085
-# pse_flu_85|pse_flu_85_24490
-# pse_flu_87|PflQ2_4978
-# pse_flu_9|pse_flu_9_09615
-# pse_pse_2|AU05_14060
-# sta_aur_99|T933_01327
-# myc_gen_2|MG_341
-# myc_pne_55|C680_02920
-# long branch sequences removed from alignment and tree -- final file: all.final.fa
-# now run primer prospector on this alignment
-generate_primers_denovo.py -i all.final.fa \
-	-o rpob_primers.txt \
-	-a ../rpoB_alignment.fasta \
-	-p 0.98
-# sort primers
-sort_denovo_primers.py -i rpob_primers.txt -a 900:5000
-# get scores for primers
-# initialize primer queries
-# grep -v "Est" amplicon_len_pairs.txt | sort | uniq | sed 's/^/analyze_primers.py -f all.fa -p /' | sed 's/\t/ -s /' | sed 's/$/ -o primers/'
-analyze_primers.py -f all.fa -p 1285r -s TCGGWAGTTYTCCCYTTGGG -o primers &
-analyze_primers.py -f all.fa -p 1320r -s AGTTCACTCGMYTTTCCCAA -o primers &
-analyze_primers.py -f all.fa -p 1321r -s GAGTTCACTCGMYTTTCCCA -o primers &
-analyze_primers.py -f all.fa -p 1322r -s AGAGTTCACTCGMYTTTCCC -o primers &
-analyze_primers.py -f all.fa -p 1323r -s CAGAGTTCACTCGMYTTTCC -o primers &
-analyze_primers.py -f all.fa -p 1523r -s CRTGCGCCGCCATYTTTCCC -o primers &
-analyze_primers.py -f all.fa -p 1524r -s CCRTGCGCCGCCATYTTTCC -o primers &
-analyze_primers.py -f all.fa -p 1570r -s CGGKCCTYKWGWAGGCATTC -o primers &
-analyze_primers.py -f all.fa -p 1571r -s ACGGKCCTYKWGWAGGCATT -o primers &
-analyze_primers.py -f all.fa -p 1572r -s CACGGKCCTYKWGWAGGCAT -o primers &
-analyze_primers.py -f all.fa -p 1605r -s CCRAYRTTCATCGAGGACCC -o primers &
+	-n tre \
+	-s good.hits.trimal.fa
+# fix headers in alignment file
+sed -i 's/;/ /g' good.hits.align.fa
+rm *untrim.tre
+# untrimmed reference tree
+raxmlHPC-PTHREADS -T 30 \
+	-m GTRCAT \
+	-c 25 \
+	-e 0.001 \
+	-p 31415 \
+	-f a \
+	-N 100 \
+	-x 02938 \
+	-n untrim.tre \
+	-s good.hits.align.fa
+# get taxonomy from accession IDs
+grep ">" good.hits.trimal.fa | sed 's/>//' | awk -F"_" '{print $1}' > batchez_query.ids
+IFS=$'\n'; for line in $(cat batchez_query.ids); 
+	do esearch -db nuccore -query $line | \
+	elink -target taxonomy | \
+	efetch -format native -mode xml | \
+	grep -m 1 ScientificName | \
+	sed 's/<ScientificName>//' | \
+	sed 's/<\/ScientificName>//' | \
+	sed 's/^[ \t]*//g' | \
+	sed 's/ /_/g'; done > taxonomy.txt
+# make annotations file
+grep ">" good.hits.trimal.fa | sed 's/>//' | paste - taxonomy.txt > annotations.txt
+sed -i 1i"accession\ttaxonomy" annotations.txt
+# still have two distinct clades -- need to figure out if there are actually two copies, run panaroo
+# download from NCBI Assembly database
+# search query: ("Streptococcus"[Organism] OR streptococcus[All Fields]) AND ((latest[filter] OR "latest refseq"[filter]) AND "complete genome"[filter] AND (all[filter] NOT "derived from surveillance project"[filter] AND all[filter] NOT anomalous[filter]) AND "genbank has annotation"[Properties])
+
+#######################
+# PANAROO STREPTOCOCCUS
+#######################
+# install panaroo
+# conda install -c conda-forge -c bioconda -c defaults panaroo
+# install updated version mash 
+# install prokka
+# conda install -c conda-forge -c bioconda -c defaults prokka
+# upgrade tbl2asn
+# get dependency glib-2.14
+# mkdir ~/src/glibc_install; cd ~/src/glibc_install 
+# wget http://ftp.gnu.org/gnu/glibc/glibc-2.14.tar.gz
+# tar zxvf glibc-2.14.tar.gz
+# cd glibc-2.14
+# mkdir build
+# cd build
+# ../configure --prefix=/opt/glibc-2.14
+# make -j4
+# cd /opt/glibc-2.14/etc
+# sudo sh -c "echo '/usr/local/lib' >> ld.so.conf" 
+# sudo sh -c "echo '/opt/lib' >> ld.so.conf"
+# cd ~/src/glibc_install/glibc-2.14/build
+# sudo make install
+# export LD_LIBRARY_PATH="/opt/glibc-2.14/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# now download the newest version of tbl2asn
+# cd ~/src
+# wget ftp://ftp.ncbi.nih.gov/toolbox/ncbi_tools/converters/by_program/tbl2asn/linux64.tbl2asn.gz
+# gzip -d linux64.tbl2asn.gz
+# chmod +x linux64.tbl2asn
+# mv linux64.tbl2asn ~/src/miniconda3/bin/tbl2asn 
+# # first need to run prokka on all strep genomes
+# cd ~/rpo_gene/panaroo/ncbi-genomes-2020-09-14
+# export LC_ALL=C
+# # max 20 cores per job
+# ls *fna | sed 's/.fna//' | while read line; do prokka --force --prefix $line $line.fna --cpus 20 2> prokka.log; done &
+
+# fix mash install to 2.2
+# wget https://github.com/marbl/Mash/releases/download/v2.2/mash-Linux64-v2.2.tar
+# tar xvf mash-Linux64-v2.2.tar
+# cd mash-Linux64-v2.2
+# mv ./mash ~/src/miniconda3/bin/mash
+
+# quality control checks 
+# get reference database
+# wget https://gembox.cbcb.umd.edu/mash/refseq.genomes.k21s1000.msh
+panaroo-qc -i /data2/vince/oral/ncbi-genbank/strep/genomic/str_smu/smu-id/fna/*/*gff \
+	-o results/ \
+	-t 15 \
+	--graph_type all \
+	--ref_db refseq.genomes.k21s1000.msh
+# I'm not sure how to interpret the results, continue on with panaroo pipeline, come back to this
+panaroo -i /data2/vince/oral/ncbi-genbank/strep/genomic/str_smu/smu-id/fna/*/*gff \
+	-o results/ \
+	--mode strict \
+	-a pan \
+	-t 40
+# now want to pull the locus tags that are annotated by prokka for each rpo gene
+# get locus tags for each
+grep "rpoA" gene_presence_absence.csv | tr "," "\n" | grep "smu" > rpoA_locus.ids
+grep "rpoB" gene_presence_absence.csv | tr "," "\n" | grep "smu" > rpoB_locus.ids
+grep "rpoC" gene_presence_absence.csv | tr "," "\n" | grep "smu" > rpoC_locus.ids
+# how many of each?
+wc -l *ids
+ # 172 rpoA_locus.ids
+ # 172 rpoB_locus.ids
+ # 172 rpoC_locus.ids
+# looks like we have a representative for each across same number of genomes, only a single locus tag per each....
+# now want to pull those locus tags and build a tree from them to see if the sequences are different
+# pull fasta for each gene
+cat rpoA_locus.ids | while read line; do grep -w $line gene_data.csv | awk -F"," '{print ">rpoA_"$1"|"$2"|"$4"\n"$6}' ; done > rpoA_locus.fa
+cat rpoB_locus.ids | while read line; do grep -w $line gene_data.csv | awk -F"," '{print ">rpoB_"$1"|"$2"|"$4"\n"$6}' ; done > rpoB_locus.fa
+cat rpoC_locus.ids | while read line; do grep -w $line gene_data.csv | awk -F"," '{print ">rpoC_"$1"|"$2"|"$4"\n"$6}' ; done > rpoC_locus.fa
+# align
+ls rpo*fa | sed 's/.fa//' | parallel --gnu 'mafft {}.fa > {}.align.fa'
+# align as one tree for funzies
+cat rpoA_locus.fa rpoB_locus.fa rpoC_locus.fa > all_rpo.fa
+mafft all_rpo.fa > all_rpo.align.fa
+# build trees
+ls *align.fa | sed 's/.align.fa//' | parallel --gnu 'fasttree < {}.align.fa > {}.tre'
+
+# talked to vince, want to try to cluster our rpoC reads against the full oral genome db at 50% ID
+# on hillary
+cd /home/allie/rpo_gene/rpoC
+vsearch \
+	--usearch_global /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn \
+	--db good.hits.clust.fa \
+	--otutabout n4584_rpoC_50PID_otutable.txt \
+	--strand both \
+	--id 0.50 \
+	--threads 60 \
+	--matched n4584_rpoC_50PID.fa \
+	--uc n4584_rpoC_50PID.uc
+
+# while this is running, do primer prospector analyze primers using short amplicons
+analyze_primers.py -f ~/refdb/oral_bac_genomes/n4584.fnn -P primersF.txt
+analyze_primers.py -f ~/refdb/oral_bac_genomes/n4584.fnn -P primersR.txt
+get_amplicons_and_reads.py \
+	-f ~/refdb/oral_bac_genomes/n4584.fnn \
+	-i Univf_rpoB_deg_n4584_hits.txt:Univr_rpoB_deg_n4584_hits.txt \
+	-t 1.5
+# sort and dereplicate
+vsearch --sortbylength Univf_Univr_amplicons.fasta \
+	--output Univf_Univr_amplicons.sort.fa
+vsearch --derep_fulllength Univf_Univr_amplicons.sort.fa \
+	--outpout Univf_Univr_amplicons.derep.fa \
+	--sizeout
+# align and build into tree
+mafft Univf_Univr_amplicons.derep.fa > Univf_Univr_amplicons.align.fa
+# format headers for raxml
+sed -i 's/;/ /g' Univf_Univr_amplicons.align.fa
+# build tree
+raxmlHPC-PTHREADS -T 8 \
+	-m GTRCAT \
+	-c 25 \
+	-e 0.001 \
+	-p 31415 \
+	-f a \
+	-N 100 \
+	-x 02938 \
+	-n tre \
+	-s Univf_Univr_amplicons.align.fa
+# while this is running, get list of hits, find out which taxa are not represented
+grep ">" Univf_Univr_amplicons.fasta | sed 's/>//' | awk -F"|" '{print $1}' > primer_hits.txt
+diff temp primer_hits.txt > primer_diff.txt
+# there's quite a bit of drop out, try to optimze primers?
+optimize_primers.py -i Univf_rpoB_deg_n4584_hits.txt
+optimize_primers.py -i Univr_rpoB_deg_n4584_hits.txt
+# analyze optimized primers
+analyze_primers.py -f ~/refdb/oral_bac_genomes/n4584.fnn -P primersF_opt.txt &
+analyze_primers.py -f ~/refdb/oral_bac_genomes/n4584.fnn -P primersR_opt.txt &
+# get amplicons from optimized primers
+get_amplicons_and_reads.py \
+	-f ~/refdb/oral_bac_genomes/n4584.fnn \
+	-i rpoBf_opt_n4584_hits.txt:rpoBr_opt_n4584_hits.txt \
+	-t 1.5
+# sort and dereplicate
+vsearch --sortbylength rpoBf_rpoBr_amplicons.fasta \
+	--output rpoBf_rpoBr_amplicons.sort.fa
+vsearch --derep_fulllength rpoBf_rpoBr_amplicons.sort.fa \
+	--output rpoBf_rpoBr_amplicons.derep.fa \
+	--sizeout
+# align and build into tree
+mafft rpoBf_rpoBr_amplicons.derep.fa > rpoBf_rpoBr_amplicons.align.fa
+# format headers for raxml
+sed -i 's/;/ /g' rpoBf_rpoBr_amplicons.align.fa
+# build tree
+raxmlHPC-PTHREADS -T 8 \
+	-m GTRCAT \
+	-c 25 \
+	-e 0.001 \
+	-p 31415 \
+	-f a \
+	-N 100 \
+	-x 02938 \
+	-n opt.tre \
+	-s rpoBf_rpoBr_amplicons.align.fa
+# what species/strains do we gain with optimized primers?
+grep ">" Univf_Univr_amplicons.fasta | sed 's/>//' | awk -F"|" '{print $1}' | sed 's/_/./' | awk -F"_" '{print $1}' | sort | uniq  > temp1
+grep ">" rpoBf_rpoBr_amplicons.fasta | sed 's/>//' | awk -F"|" '{print $1}' | sed 's/_/./' | awk -F"_" '{print $1}' | sort | uniq  > temp2
+diff temp1 temp2 > optimized_primer_added_species.txt
+# get annotations for both trees
+grep ">" rpoBf_rpoBr_amplicons.fasta | sed 's/>//' > temp1
+cat temp1 | awk -F"|" '{print $1}' | while read line; do grep -w $line ~/refdb/oral_bac_genomes/ID-n4584-1.txt ; done > temp2
+paste temp1 temp2 > annotations.txt 
+# add headers in nano
+# what taxa are we losing completely with both?
+cat annotations.txt | sort > temp1
+cat ~/refdb/oral_bac_genomes/ID-n4584-1.txt | sort > temp2
+diff temp1 temp2 | grep ">" | sed 's/> //' > lost_taxa.txt
+# try clustering really lax threshold amplicons (3.0) to get as many strains/species as possible
+get_amplicons_and_reads.py \
+	-f ~/refdb/oral_bac_genomes/n4584.fnn \
+	-i rpoBf_opt_n4584_hits.txt:rpoBr_opt_n4584_hits.txt \
+	-t 3.0 \
+	-o amplicons_for_vsearch
+# sort and dereplicate
+cd amplicons_for_vsearch
+vsearch --sortbylength rpoBf_rpoBr_amplicons.fasta --output rpoBf_rpoBr_amplicons.sort.fa
+# what threshold to trim really long sequences?
+Rscript plot_GC_length.R rpoBf_rpoBr_amplicons.derep.fa
+# dereplicate
+vsearch --derep_fulllength rpoBf_rpoBr_amplicons.sort.fa \
+	--output rpoBf_rpoBr_amplicons.derep.fa \
+	--sizeout \
+	--minseqlength 300 \
+	--maxseqlength 800
+# align and build tree
+mafft rpoBf_rpoBr_amplicons.derep.fa > rpoBf_rpoBr_amplicons.align.fa 
+# format headers for raxml
+sed -i 's/;/ /g' rpoBf_rpoBr_amplicons.align.fa
+# build tree
+raxmlHPC-PTHREADS -T 8 \
+	-m GTRCAT \
+	-c 25 \
+	-e 0.001 \
+	-p 31415 \
+	-f a \
+	-N 100 \
+	-x 02938 \
+	-n trim.tre \
+	-s rpoBf_rpoBr_amplicons.align.fa
+# are the lost taxa actually lost (i.e., no representatives of that species in the tree?)
+awk '{print $2}' lost_taxa.txt | sed 's/_/./' | awk -F"_" '{print $1}' | sort | uniq | sed 's/\./_/' > lost_species_temp
+awk -F"\t" '{print $3}' annotations.txt | sed 's/_/./' | awk -F"_" '{print $1}' | sort | uniq | sed 's/\./_/' > found_taxa_temp
+diff lost_species_temp found_taxa_temp
+diff lost_species_temp found_taxa_temp | grep "<" | sed 's/< //' > no_representatives.txt
+#####################
+# PLACEMENT TREE TEST
+#####################
+
+# what if we tried something like the eukref pipeline (which is unfortunately currently down)?
+# can use those reads that formed a nice tree and blasted them against nt at low seq similarity
+# then place them into our nice tree and see if we can't expand the references?
+# working off our 99% clustered, untrimmed reads as query
+cat good.hits.clust.fa | parallel --gnu --block 50k --recstart '>' --pipe \
+	blastn -evalue 1e-10 \
+	-max_target_seqs 5 \
+	-perc_identity 0.60 \
+	-outfmt 6 \
+	-db /data2/refdb/ncbi_nt_blast/nt \
+	-query - > good.hits.clust.blast.out 
+# pull regions of interest
+awk '{if($10>$9){print($2"\t"$9-1"\t"$10)}else{print($2"\t"$10-1"\t"$9)}}' \
+	good.hits.clust.blast.out > for.placement.bed
+# slice database
+bedtools getfasta -fi /data2/refdb/ncbi_nt_blast/nt -bed for.placement.bed >  for.placement.hits.fa
+# sort by length
+vsearch --sortbylength for.placement.hits.fa --output for.placement.hits.sort.fa
+# remove sequence duplicates
+vsearch --derep_fulllength for.placement.hits.sort.fa \
+	--output for.placement.hits.derep.fa \
+	--uc for.placement.hits.derep.uc \
+	--sizeout
+# check for chimeric sequences in newly downloaded sequences
+vsearch --uchime_denovo for.placement.hits.derep.fa --sizein --sizeout --nonchimeras for.placement.nochim.fa
+# then add to untrimmed alignment using sina
+sina -i good.hits.align.fa --prealigned -o good.hits.align.arb
+sina -i for.placement.nochim.fa -r good.hits.align.arb -o for.placement.sina.fa -p 2
+# make placement tree using good tree
+# fix headers in ref to match tree
+sed -i 's/ /_/g' good.hits.align.fa
+cat for.placement.sina.fa good.hits.align.fa > queryalign_plus_refalign.fa
+sed -i 's/:/_/g' queryalign_plus_refalign.fa
+sed -i 's/;/_/g' queryalign_plus_refalign.fa
+sed -i 's/,//g' queryalign_plus_refalign.fa
+# remove sequences with same name and seq
+cat queryalign_plus_refalign.fa |\
+awk '/^>/ {printf("%s%s\t",(N>0?"\n":""),$0);N++;next;} {printf("%s",$0);} END {printf("\n");}' |\
+sort -t $'\t' -k1,1 -u |\
+tr "\t" "\n" > fix.align.fa
+# make tree with reduced file generated by raxml
+rm *const.tre
+~/raxmlHPC-AVX-v8/raxml -f a -N 100 -G 0.2 -m GTRCAT -n const.tre -s fix.align.fa -g ../RAxML_bipartitions.tre -T 4 -x 25734 -p 25793
 
 
-analyze_primers.py -f all.fa -p 1606r -s GCCRAYRTTCATCGAGGACC -o primers &
-analyze_primers.py -f all.fa -p 1612r -s TCAACTGCCRAYRTTCATCG -o primers &
-analyze_primers.py -f all.fa -p 1613r -s YTCAACTGCCRAYRTTCATC -o primers &
-analyze_primers.py -f all.fa -p 1614r -s GYTCAACTGCCRAYRTTCAT -o primers &
-analyze_primers.py -f all.fa -p 1690r -s RKCYATCTCTKGCCCTCAAA -o primers &
-analyze_primers.py -f all.fa -p 1755r -s AACGGCRTGATYTTTCTCAC -o primers &
-analyze_primers.py -f all.fa -p 1756r -s GAACGGCRTGATYTTTCTCA -o primers &
-analyze_primers.py -f all.fa -p 1757r -s TGAACGGCRTGATYTTTCTC -o primers &
-analyze_primers.py -f all.fa -p 1758r -s CTGAACGGCRTGATYTTTCT -o primers &
-analyze_primers.py -f all.fa -p 1786r -s CYTTACCCCAGGYTGTGGTA -o primers &
-analyze_primers.py -f all.fa -p 1787r -s GCYTTACCCCAGGYTGTGGT -o primers &
-analyze_primers.py -f all.fa -p 1788r -s GGCYTTACCCCAGGYTGTGG -o primers &
-analyze_primers.py -f all.fa -p 1794r -s ACCAATGGCYTTACCCCAGG -o primers &
-analyze_primers.py -f all.fa -p 1795r -s CACCAATGGCYTTACCCCAG -o primers &
-analyze_primers.py -f all.fa -p 1796r -s CCACCAATGGCYTTACCCCA -o primers &
-analyze_primers.py -f all.fa -p 1822r -s TCAGCCCAACTCCATTCCCA -o primers &
-analyze_primers.py -f all.fa -p 1823r -s TTCAGCCCAACTCCATTCCC -o primers &
-analyze_primers.py -f all.fa -p 1824r -s CTTCAGCCCAACTCCATTCC -o primers &
-analyze_primers.py -f all.fa -p 1825r -s GCTTCAGCCCAACTCCATTC -o primers &
-analyze_primers.py -f all.fa -p 1826r -s AGCTTCAGCCCAACTCCATT -o primers &
-analyze_primers.py -f all.fa -p 1827r -s TAGCTTCAGCCCAACTCCAT -o primers &
-analyze_primers.py -f all.fa -p 1828r -s CTAGCTTCAGCCCAACTCCA -o primers &
-analyze_primers.py -f all.fa -p 1829r -s CCTAGCTTCAGCCCAACTCC -o primers &
-analyze_primers.py -f all.fa -p 1830r -s CCCTAGCTTCAGCCCAACTC -o primers &
-analyze_primers.py -f all.fa -p 1831r -s GCCCTAGCTTCAGCCCAACT -o primers &
-analyze_primers.py -f all.fa -p 1832r -s MGCCCTAGCTTCAGCCCAAC -o primers &
-analyze_primers.py -f all.fa -p 1833r -s GMGCCCTAGCTTCAGCCCAA -o primers &
-analyze_primers.py -f all.fa -p 1834r -s TGMGCCCTAGCTTCAGCCCA -o primers &
-analyze_primers.py -f all.fa -p 1835r -s RTGMGCCCTAGCTTCAGCCC -o primers &
-analyze_primers.py -f all.fa -p 269f -s TATYCCTWACCGGGTCTGGT -o primers &
-analyze_primers.py -f all.fa -p 525f -s GGAAYCGTCGRTCGGTGGGA -o primers &
-analyze_primers.py -f all.fa -p 525f -s TGGAAYCGTCGRTCGGTGGG -o primers &
-analyze_primers.py -f all.fa -p 525f -s YTGGAAYCGTCGRTCGGTGG -o primers &
-analyze_primers.py -f all.fa -p 591f -s GWWCARTTCCARTTYATGGA -o primers &
-analyze_primers.py -f all.fa -p 632f -s CCACAARCGCGYTTCGCTGG -o primers &
-analyze_primers.py -f all.fa -p 695f -s CAYTAYGGCGRTTGCCATGA -o primers &
-analyze_primers.py -f all.fa -p 868f -s RTGTCGTGCCCKATYCCTTC -o primers &
-analyze_primers.py -f all.fa -p 869f -s TGTCGTGCCCKATYCCTTCT -o primers &
-analyze_primers.py -f all.fa -p 870f -s GTCGTGCCCKATYCCTTCTG -o primers &
-analyze_primers.py -f all.fa -p 894f -s YGAYGAYKCAACCGYGCTAT -o primers &
-analyze_primers.py -f all.fa -p 895f -s GAYGAYKCAACCGYGCTATG -o primers &
-
-
-
-
-# get amplicons
 
 
 
@@ -255,4 +371,8 @@ analyze_primers.py -f all.fa -p 895f -s GAYGAYKCAACCGYGCTATG -o primers &
 
 
 
-# place these into the tree with tagged primer set to make sure they're actually amplifying 
+
+
+
+
+
