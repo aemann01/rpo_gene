@@ -276,11 +276,12 @@ get_amplicons_and_reads.py \
 	-t 1.5 &
 # deactivate
 conda deactivate
-# summary stats
+# summary stats (example script)
 ls *amplicons.fasta | while read line; do 
 	python fasta_len.py $line | cut -f 2 | bash fasta_stats.sh
 	; done
-
+grep ">" rpoBf_1009r_amplicons.fasta  | awk -F"|" '{print $1}' | sed 's/_/./' | awk -F"_" '{print $1}' | sort | uniq | wc -l
+grep ">" rpoBf_1009r_amplicons.fasta  | awk -F"|" '{print $1}' | sort | uniq | wc -l
 #################
 # RPOC PROCESSING
 #################
@@ -453,18 +454,20 @@ cd ../rpoC
 trimal -in good.hits.align.fa -out good.hits.trimal.fa -gt 0.1
 mkdir denovo_primers && cd denovo_primers
 conda activate py2.7
-generate_primers_denovo.py -i ../good.hits.trimal.fa -o primer_hits.txt
-##########################
-# TEST DENOVO RPOC PRIMERS
-##########################
+generate_primers_denovo.py -i ../good.hits.trimal.fa -o primer_hits.txt -p 0.3
+sort_denovo_primers.py -i primer_hits.txt
 # analyze primers
-ls *txt | parallel --gnu \
-	'analyze_primers.py -f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn -P {}'
-# generate amplicons and reads for each pair
-get_amplicons_and_reads.py \
-	-f $ORALGENOMEDB \
-	-i 401f_n4584_hits.txt:1064r_n4584_hits.txt \
-	-t 1.5 &
+ls *f.txt | parallel --gnu \
+	'analyze_primers.py -f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn -P {}' &
+ls *r.txt | parallel --gnu \
+	'analyze_primers.py -f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn -P {}' &
+# generate amplicons and reads for each pair (picked top 10 forward and reverse)
+cat forward_hits.ids | while read line; 
+	do cat reverse_hits.ids | while read second; 
+	do get_amplicons_and_reads.py \
+	-f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn \
+	-i $line\:$second \
+	-t 1.5 ; done; done
 
 #####################
 # PLACEMENT TREE TEST
@@ -498,22 +501,13 @@ vsearch --derep_fulllength for.placement.hits.sort.fa \
 vsearch --uchime_denovo for.placement.hits.derep.fa --sizein --sizeout --nonchimeras for.placement.nochim.fa
 # reference based alignment using pynast
 pynast -i for.placement.nochim.fa -t ../good.hits.align.fa -p 0.60
-# generate placement tree
-
-## STOPPED HERE
-
-
-
-
-# make placement tree using good tree
 # fix headers in ref to match tree
-sed -i 's/ /_/g' good.hits.align.fa
-cat for.placement.sina.fa good.hits.align.fa > queryalign_plus_refalign.fa
+sed -i 's/ /_/g' ../good.hits.align.fa
+cat for.placement.nochim_pynast_aligned.fasta ../good.hits.align.fa > queryalign_plus_refalign.fa
 sed -i 's/:/_/g' queryalign_plus_refalign.fa
 sed -i 's/;/_/g' queryalign_plus_refalign.fa
 sed -i 's/,//g' queryalign_plus_refalign.fa
 # remove sequences with same name and seq
-cat queryalign_plus_refalign.fa |\
 awk '/^>/ {printf("%s%s\t",(N>0?"\n":""),$0);N++;next;} {printf("%s",$0);} END {printf("\n");}' |\
 sort -t $'\t' -k1,1 -u |\
 tr "\t" "\n" > fix.align.fa
@@ -522,4 +516,28 @@ tr "\t" "\n" > fix.align.fa
 rm *const.tre
 ~/raxmlHPC-AVX-v8/raxml -f a -N 100 -G 0.2 -m GTRCAT -n const.tre -s fix.align.fa -g ../RAxML_bipartitions.tre -T 4 -x 25734 -p 25793
 
-
+#####################################
+# TEST DENOVO WITH VINCE'S ALIGNMENTS
+#####################################
+generate_primers_denovo.py -i rpoC-alignment-n297.fnn -o rpoC-alignment-n297.primer.hits &
+generate_primers_denovo.py -i rpoB-n292.fnn -o rpoB-n292.primer.hits &
+sort_denovo_primers.py -i rpoB-n292.primer.hits -o sort_rpoB_primers
+sort_denovo_primers.py -i rpoC-alignment-n297.primer.hits -o sort_rpoC_primers
+cd sort_rpoC_primers
+grep "f" formatted_primers.txt | head -n 10 > forward 
+grep "r" formatted_primers.txt | head -n 10 > reverse
+cat forward reverse | split -l 1
+ls x* | parallel --gnu 'analyze_primers.py -f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn -P {}' &
+cd ../sort_rpoB_primers
+grep "f" formatted_primers.txt | head -n 10 > forward 
+grep "r" formatted_primers.txt | head -n 10 > reverse
+cat forward reverse | split -l 1
+ls x* | parallel --gnu 'analyze_primers.py -f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn -P {}' &
+ls *f_n* > forward_hits.ids
+ls *r_n* > reverse_hits.ids
+cat forward_hits.ids | while read line; 
+	do cat reverse_hits.ids | while read second; 
+	do get_amplicons_and_reads.py \
+	-f /data2/vince/oral/ncbi-genbank/homd-oral2/genomic/no-plasmid-subsample-char/n4584-vsearch/n4584.fnn \
+	-i $line\:$second \
+	-t 1.5 ; done; done
